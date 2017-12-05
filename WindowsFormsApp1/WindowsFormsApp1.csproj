@@ -51,6 +51,14 @@
     <Compile Include="Form1.Designer.cs">
       <DependentUpon>Form1.cs</DependentUpon>
     </Compile>
+    <Compile Include="PMPagkage\FileContentOper\Model\FBLLineItem.cs" />
+    <Compile Include="PMPagkage\Oper\FileXMLPackage.cs" />
+    <Compile Include="PMPagkage\Oper\IPackageAble.cs" />
+    <Compile Include="PMPagkage\FileContentOper\Model\PKHandler.cs" />
+    <Compile Include="PMPagkage\Oper\PKItem.cs" />
+    <Compile Include="PMPagkage\FileContentOper\Model\PKPointer.cs" />
+    <Compile Include="PMPagkage\FileContentOper\PKStream.cs" />
+    <Compile Include="PMPagkage\FileContentOper\Model\PKStreamOption.cs" />
     <Compile Include="Program.cs" />
     <Compile Include="Properties\AssemblyInfo.cs" />
     <EmbeddedResource Include="Form1.resx">
