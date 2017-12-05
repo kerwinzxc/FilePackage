@@ -31,7 +31,7 @@ namespace PMPagkage
         private readonly byte[] OReadBytes = new byte[4];
 
         /* FB文件的最大写入目录数 */
-        private readonly int FBL_NUMBER = 200;
+        //private readonly int FBL_NUMBER = 200;
 
         private readonly string FBL_EXT = ".fbl";
         private readonly string BCL_EXT = ".bcl";
@@ -182,6 +182,7 @@ namespace PMPagkage
             }
         }
 
+        /* 顺序读取内容 */
         public PKItem Read()
         {
             if((List<FBLLineItem>)null == fbl_items)
@@ -195,131 +196,11 @@ namespace PMPagkage
             {
                 FBLLineItem read_item = fbl_items[read_index];
 
+                PKItem pkitem = this.LoadFBLineItemContent(read_item);
+
                 read_index++;
 
-                if (null == read_item.Length)
-                {
-                    PKItem pkitem = new PKItem();
-
-                    pkitem.ItemType = read_item.ItemType;
-                    pkitem.Name = read_item.Name;
-                    pkitem.Content = null;
-
-                    return pkitem;
-                }
-                else
-                {
-                    string bcl_path = this.TargetDirectoryPath + read_item.BCLIndex + BCL_EXT;
-
-                    if (!filetools.LocalFileExists(bcl_path))
-                    {
-                        return null;
-                    }
-                    else
-                    {
-                        string bclindex = read_item.BCLIndex;
-                        string startindex = read_item.StartIndex;
-                        string length = read_item.Length;
-
-                        int less_length = BCL_SIZE - Int32.Parse(startindex);
-                        byte[] filebytes = new byte[Int32.Parse(length)];
-
-                        if (less_length >= Int32.Parse(length))
-                        {
-                            using (FileStream stream = new FileStream(bcl_path, FileMode.Open, FileAccess.Read, FileShare.Read, STREAM_WRITE_BUFFER, false))
-                            {
-                                stream.Seek(Int32.Parse(startindex), SeekOrigin.Begin);
-                                stream.Read(filebytes, 0, Int32.Parse(length));
-                            }
-                        }
-                        else
-                        {
-                            byte[] headbytes = new byte[less_length];
-                            byte[] next_file_index_bytes_read = new byte[3];
-                            int copy_index = 0;
-
-                            using (FileStream stream = new FileStream(bcl_path, FileMode.Open, FileAccess.Read, FileShare.Read, STREAM_WRITE_BUFFER, false))
-                            {
-                                stream.Seek(3, SeekOrigin.Begin);
-                                stream.Read(next_file_index_bytes_read, 0, 3);
-
-                                /* read */
-                                stream.Seek(Int32.Parse(startindex), SeekOrigin.Begin);
-                                stream.Read(headbytes, 0, less_length);
-
-                                Buffer.BlockCopy(headbytes, 0, filebytes, 0, less_length);
-                                copy_index += less_length;
-                            }
-
-                            int shao_length = Int32.Parse(length) - less_length;
-
-                            byte[] next_file_index_bytes = null;
-                            string next_bal_path = "";
-
-                            DI_GUI_SHI_SHA:
-                            if (sizeof(int) == 8)
-                            {
-                                next_file_index_bytes = new byte[8];
-                            }
-                            else
-                            {
-                                next_file_index_bytes = new byte[4];
-                            }
-
-                            Buffer.BlockCopy(next_file_index_bytes_read, 0, next_file_index_bytes, 0, 3);
-
-                            if (sizeof(int) == 8)
-                            {
-                                next_bal_path = this.TargetDirectoryPath + System.BitConverter.ToInt64(next_file_index_bytes, 0) + BCL_EXT;
-                            }
-                            else
-                            {
-                                next_bal_path = this.TargetDirectoryPath + System.BitConverter.ToInt32(next_file_index_bytes, 0) + BCL_EXT;
-                            }
-
-                            //TODO:文件的连续读
-                            using (FileStream stream = new FileStream(next_bal_path, FileMode.Open, FileAccess.Read, FileShare.Read, STREAM_WRITE_BUFFER, false))
-                            {
-                                if (BCL_SIZE - 6 >= shao_length)
-                                {
-                                    byte[] next_bytes = new byte[shao_length];
-
-                                    /* read */
-                                    stream.Seek(6, SeekOrigin.Begin);
-                                    stream.Read(next_bytes, 0, shao_length);
-
-                                    Buffer.BlockCopy(next_bytes, 0, filebytes, copy_index, shao_length);
-                                    //copy_index += less_length;
-                                }
-                                else
-                                {
-                                    byte[] next_bytes = new byte[BCL_SIZE - 6];
-
-                                    stream.Seek(3, SeekOrigin.Begin);
-                                    stream.Read(next_file_index_bytes_read, 0, 3);
-
-                                    /* read */
-                                    stream.Read(next_bytes, 0, BCL_SIZE - 6);
-
-                                    Buffer.BlockCopy(next_bytes, 0, filebytes, copy_index, BCL_SIZE - 6);
-                                    copy_index += (BCL_SIZE - 6);
-
-                                    shao_length -= (BCL_SIZE - 6);
-
-                                    goto DI_GUI_SHI_SHA;
-                                }
-                            }
-                        }
-
-                        PKItem pkitem = new PKItem();
-
-                        pkitem.ItemType = read_item.ItemType;
-                        pkitem.Name = read_item.Name;
-                        pkitem.Content = filebytes;
-
-                        return pkitem;
-                    }
-                }
+                return pkitem;
             }
             else
             {
@@ -327,6 +208,154 @@ namespace PMPagkage
             }
         }
 
+        /* 获取所有目录项 */
+        public List<FBLLineItem> GetAllItem()
+        {
+            if ((List<FBLLineItem>)null == fbl_items)
+            {
+                fbl_items = new List<FBLLineItem>();
+
+                this.FBLReadInit();
+            }
+
+            return fbl_items;
+        }
+
+        /* 根据项读取内容 */
+        public PKItem Read(FBLLineItem read_item)
+        {
+            return this.LoadFBLineItemContent(read_item);
+        }
+
+        #region Private Methods
+
+        PKItem LoadFBLineItemContent(FBLLineItem read_item)
+        {
+            if (null == read_item.Length)
+            {
+                PKItem pkitem = new PKItem();
+
+                pkitem.ItemType = read_item.ItemType;
+                pkitem.Name = read_item.Name;
+                pkitem.Content = null;
+
+                return pkitem;
+            }
+            else
+            {
+                string bcl_path = this.TargetDirectoryPath + read_item.BCLIndex + BCL_EXT;
+
+                if (!filetools.LocalFileExists(bcl_path))
+                {
+                    return null;
+                }
+                else
+                {
+                    string bclindex = read_item.BCLIndex;
+                    string startindex = read_item.StartIndex;
+                    string length = read_item.Length;
+
+                    int less_length = BCL_SIZE - Int32.Parse(startindex);
+                    byte[] filebytes = new byte[Int32.Parse(length)];
+
+                    if (less_length >= Int32.Parse(length))
+                    {
+                        using (FileStream stream = new FileStream(bcl_path, FileMode.Open, FileAccess.Read, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            stream.Seek(Int32.Parse(startindex), SeekOrigin.Begin);
+                            stream.Read(filebytes, 0, Int32.Parse(length));
+                        }
+                    }
+                    else
+                    {
+                        byte[] headbytes = new byte[less_length];
+                        byte[] next_file_index_bytes_read = new byte[3];
+                        int copy_index = 0;
+
+                        using (FileStream stream = new FileStream(bcl_path, FileMode.Open, FileAccess.Read, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            stream.Seek(3, SeekOrigin.Begin);
+                            stream.Read(next_file_index_bytes_read, 0, 3);
+
+                            /* read */
+                            stream.Seek(Int32.Parse(startindex), SeekOrigin.Begin);
+                            stream.Read(headbytes, 0, less_length);
+
+                            Buffer.BlockCopy(headbytes, 0, filebytes, 0, less_length);
+                            copy_index += less_length;
+                        }
+
+                        int shao_length = Int32.Parse(length) - less_length;
+
+                        byte[] next_file_index_bytes = null;
+                        string next_bal_path = "";
+
+                        DI_GUI_SHI_SHA:
+                        if (sizeof(int) == 8)
+                        {
+                            next_file_index_bytes = new byte[8];
+                        }
+                        else
+                        {
+                            next_file_index_bytes = new byte[4];
+                        }
+
+                        Buffer.BlockCopy(next_file_index_bytes_read, 0, next_file_index_bytes, 0, 3);
+
+                        if (sizeof(int) == 8)
+                        {
+                            next_bal_path = this.TargetDirectoryPath + System.BitConverter.ToInt64(next_file_index_bytes, 0) + BCL_EXT;
+                        }
+                        else
+                        {
+                            next_bal_path = this.TargetDirectoryPath + System.BitConverter.ToInt32(next_file_index_bytes, 0) + BCL_EXT;
+                        }
+
+                        //TODO:文件的连续读
+                        using (FileStream stream = new FileStream(next_bal_path, FileMode.Open, FileAccess.Read, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            if (BCL_SIZE - 6 >= shao_length)
+                            {
+                                byte[] next_bytes = new byte[shao_length];
+
+                                /* read */
+                                stream.Seek(6, SeekOrigin.Begin);
+                                stream.Read(next_bytes, 0, shao_length);
+
+                                Buffer.BlockCopy(next_bytes, 0, filebytes, copy_index, shao_length);
+                            }
+                            else
+                            {
+                                byte[] next_bytes = new byte[BCL_SIZE - 6];
+
+                                stream.Seek(3, SeekOrigin.Begin);
+                                stream.Read(next_file_index_bytes_read, 0, 3);
+
+                                /* read */
+                                stream.Read(next_bytes, 0, BCL_SIZE - 6);
+
+                                Buffer.BlockCopy(next_bytes, 0, filebytes, copy_index, BCL_SIZE - 6);
+                                copy_index += (BCL_SIZE - 6);
+
+                                shao_length -= (BCL_SIZE - 6);
+
+                                goto DI_GUI_SHI_SHA;
+                            }
+                        }
+                    }
+
+                    PKItem pkitem = new PKItem();
+
+                    pkitem.ItemType = read_item.ItemType;
+                    pkitem.Name = read_item.Name;
+                    pkitem.Content = filebytes;
+
+                    return pkitem;
+                }
+            }
+        }
+
+        /* 一次性加载所有FBL目录 */
         void FBLReadInit()
         {
             int fbl_index = 0;
@@ -351,7 +380,7 @@ namespace PMPagkage
                         {
                             this.fbl_items.Add(new FBLLineItem { Name = name, ItemType = itemtype, StartIndex = startindex, BCLIndex = bclindex, Length = length });
                         }
-                        else if(line_i != 0)
+                        else if (line_i != 0)
                         {
                             string line = alllines[line_i];
 
@@ -371,7 +400,7 @@ namespace PMPagkage
                                 {
                                     itemtype = line.Substring(9, line.Length - 9);
                                 }
-                                else if(line.StartsWith("Name="))
+                                else if (line.StartsWith("Name="))
                                 {
                                     name = line.Substring(5, line.Length - 5);
                                 }
@@ -460,5 +489,7 @@ namespace PMPagkage
 
             StreamOption.Pointer.NextFBPointer();
         }
+
+        #endregion
     }
 }

@@ -1,5 +1,6 @@
 ﻿using LDT.JudgetDoc.Infrastructure.Common.Tools;
 using System;
+using System.Collections.Generic;
 using System.IO;
 
 namespace PMPagkage
@@ -127,17 +128,36 @@ namespace PMPagkage
 
             while ((PKItem)null != pkitem)
             {
-                if(pkitem.ItemType == "[Dirctory]")
+                if (pkitem.ItemType == "[Dirctory]")
                 {
                     filetools.LocalDirectoryCreate(targetDirectoryPath + pkitem.Name);
                 }
-                else if(pkitem.ItemType == "[File]")
+                else if (pkitem.ItemType == "[File]")
                 {
                     filetools.LocalFileCreate(targetDirectoryPath + pkitem.Name, pkitem.Content, true);
                 }
 
                 pkitem = pk_stream.Read();
             }
+
+            //if (false)
+            //{
+            //    List<FBLLineItem> items = pk_stream.GetAllItem();
+
+            //    System.Threading.Tasks.Parallel.For(0, items.Count, (index) => 
+            //    {
+            //        PKItem pkitem = pk_stream.Read(items[index]);
+
+            //        if (pkitem.ItemType == "[Dirctory]")
+            //        {
+            //            filetools.LocalDirectoryCreate(targetDirectoryPath + pkitem.Name);
+            //        }
+            //        else if (pkitem.ItemType == "[File]")
+            //        {
+            //            filetools.LocalFileCreate(targetDirectoryPath + pkitem.Name, pkitem.Content, true);
+            //        }
+            //    });
+            //}
         }
 
         #endregion
