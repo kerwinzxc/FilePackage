@@ -14,10 +14,6 @@
             InitializeComponent();
         }
 
-        public byte[] yuanshi;
-        public byte[] xieru;
-        public byte[] duqu;
-
         private void button1_Click(object sender, EventArgs e)
         {
             //var yu = File.ReadAllBytes(@"D:\MyDownloads\Download\QCExplorer.rar");
@@ -85,7 +81,7 @@
     {
         FileTools filetools = new FileTools();
 
-        private readonly int FBL_NUMBER = 200;
+        
         private readonly int BCL_SIZE = 4096 * 1000;
 
         private readonly string FBL_EXT = ".fbl";
@@ -101,16 +97,6 @@
 
         public FileXMLPackage()
         {
-            if (sizeof(int) == 8)
-            {
-                Buffer.BlockCopy(INTBYTES, 5, OBytes, 0, 3);
-                Buffer.BlockCopy(INTBYTES, 4, OReadBytes, 0, 4);
-            }
-            else
-            {
-                Buffer.BlockCopy(INTBYTES, 1, OBytes, 0, 3);
-                Buffer.BlockCopy(INTBYTES, 0, OReadBytes, 0, 4);
-            }
         }
 
         public FileXMLPackage(bool useAsync):this()
@@ -123,7 +109,7 @@
             if ((File.GetAttributes(sourceDirectoryPath) & FileAttributes.Directory) == FileAttributes.Directory && (File.GetAttributes(targetDirectoryPath) & FileAttributes.Directory) == FileAttributes.Directory)
             {
 
-                /* directory */
+                /* directory path */
                 sourceDirectoryPath = new DirectoryInfo(sourceDirectoryPath).FullName;
                 if (sourceDirectoryPath.EndsWith("\\"))
                 {
@@ -135,15 +121,20 @@
                 {
                     targetDirectoryPath += "\\";
                 }
-
-                FBHandler handler = new FBHandler();
-                FBPointer pointer = new FBPointer();
+                /* directory path end */
 
                 filetools.LocalDirectoryCreate(targetDirectoryPath);
 
-                string source_root_directory_path = sourceDirectoryPath.Replace(new DirectoryInfo(sourceDirectoryPath).Name,"");
+                //TODO:验证文件夹中内容是否为空.
+                //TODO:如果有内容，下一版支持文件续写.
 
-                LoopPackage(source_root_directory_path, sourceDirectoryPath, targetDirectoryPath, handler, pointer);
+                filetools.LocalDirectoryRemoveReadOnlyAttribute(sourceDirectoryPath);
+
+                PKStream pk_stream = new PKStream(targetDirectoryPath);
+
+                string source_root_directory_path = sourceDirectoryPath.Replace(new DirectoryInfo(sourceDirectoryPath).Name, "");
+
+                this.LoopPackage(source_root_directory_path, sourceDirectoryPath, pk_stream);
             }
             else
             {
@@ -176,51 +167,336 @@
             }
         }
 
-        internal class FBHandler
+        internal class PKStream
         {
-            public int FB_Index = 0;
-            public int BC_Index = 1;
+            #region Member
 
-            //public FileStream stream;
+            FileTools filetools = new FileTools();
+
+            private readonly int BCL_SIZE = 4096 * 1000;
+
+            private readonly int STREAM_WRITE_BUFFER = 4096;
+
+            private string TargetDirectoryPath;
+
+            private readonly byte[] INTBYTES = System.BitConverter.GetBytes(0);
+            private readonly byte[] OBytes = new byte[3];
+            private readonly byte[] OReadBytes = new byte[4];
+
+            private readonly int FBL_NUMBER = 200;
+
+            private readonly string FBL_EXT = ".fbl";
+            private readonly string BCL_EXT = ".bcl";
+
+            PKStreamOption StreamOption { get; set; }
+
+            #endregion
+
+            #region Ctor
+
+            public PKStream(string targetDirectoryPath)
+            {
+                this.TargetDirectoryPath = targetDirectoryPath;
+
+                Buffer.BlockCopy(INTBYTES, 0, OBytes, 0, OBytes.Length);
+                Buffer.BlockCopy(INTBYTES, 0, OReadBytes, 0, OReadBytes.Length);
+
+                StreamOption = new PKStreamOption();
+            }
+
+            #endregion
+
+            public void Write(PKItem item)
+            {
+                if (null == item.Content)
+                {
+                    this.WriteFB(new string[] { item.ItemType, "Name=" + item.Name });
+                }
+                else
+                {
+                    /* 起始文件 */
+                    int start_bcl_index = StreamOption.Handler.GetBCIndex();
+                    string file_bcl_path = this.TargetDirectoryPath + StreamOption.Handler.GetBCIndex() + BCL_EXT;
+
+                    /* 创建文件 */
+                    this.BCIndexFileCreate(file_bcl_path);
+
+                    /* 起始位置 */
+                    int start_bcl_pointer = StreamOption.Pointer.GetBCPointer();
+
+                    /* 文件剩余可写长度 */
+                    int less_can_write_length = BCL_SIZE - StreamOption.Pointer.GetBCPointer();
+
+                    if (less_can_write_length > item.Content.Length)
+                    {
+                        using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            stream.Position = stream.Length;
+                            stream.Write(item.Content, 0, item.Content.Length);
+
+                            StreamOption.Pointer.NextBCPointer(item.Content.Length);
+                        }
+                    }
+                    else if (less_can_write_length < item.Content.Length)
+                    {
+                        int less_must_write_length = 0;
+
+                        /* first file */
+                        using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            stream.Position = stream.Length;
+                            stream.Write(item.Content, 0, less_can_write_length);
+
+                            StreamOption.Pointer.BCPointerReset();
+                            StreamOption.Handler.NextBCIndex();
+                        }
+
+                        less_must_write_length = item.Content.Length - less_can_write_length;
+
+                        int write_file_length = (less_must_write_length + (BCL_SIZE + (OBytes.Length * 2)) - 1) / (BCL_SIZE + (OBytes.Length * 2));
+
+                        for (int j = 0; j < write_file_length; j++)
+                        {
+                            string middle_file_bcl_path = this.TargetDirectoryPath + StreamOption.Handler.GetBCIndex() + BCL_EXT;
+
+                            this.BCIndexFileCreate(middle_file_bcl_path);
+
+                            int middle_less_length = BCL_SIZE - StreamOption.Pointer.GetBCPointer();
+
+                            if (middle_less_length > less_must_write_length)
+                            {
+                                using (FileStream stream = new FileStream(middle_file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                                {
+                                    stream.Position = stream.Length;
+                                    stream.Write(item.Content, item.Content.Length - less_must_write_length, less_must_write_length);
+
+                                    StreamOption.Pointer.NextBCPointer(less_must_write_length);
+                                }
+                            }
+                            else if (middle_less_length < less_must_write_length)
+                            {
+                                using (FileStream stream = new FileStream(middle_file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                                {
+                                    stream.Position = stream.Length;
+                                    stream.Write(item.Content, (item.Content.Length - less_must_write_length), middle_less_length);
+
+                                    StreamOption.Pointer.BCPointerReset();
+                                    StreamOption.Handler.NextBCIndex();
+
+                                    less_must_write_length -= middle_less_length;
+                                }
+                            }
+                            else/* middle_less_length == less_must_write_length */
+                            {
+                                using (FileStream stream = new FileStream(middle_file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                                {
+                                    stream.Position = stream.Length;
+                                    stream.Write(item.Content, item.Content.Length - less_must_write_length, less_must_write_length);
+
+                                    StreamOption.Pointer.BCPointerReset();
+                                    StreamOption.Handler.NextBCIndex();
+                                }
+                            }
+                        }
+                    }
+                    else/* less_length == filelength */
+                    {
+                        using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            stream.Position = stream.Length;
+                            stream.Write(item.Content, 0, item.Content.Length);
+
+                            StreamOption.Pointer.BCPointerReset();
+                            StreamOption.Handler.NextBCIndex();
+                        }
+                    }
+
+                    this.WriteFB(new string[] { item.ItemType, "Name=" + item.Name, "BCLIndex=" + start_bcl_index, "StartIndex=" + start_bcl_pointer, "Length=" + item.Content.Length });
+                }
+            }
+
+            public PKItem Read()
+            {
+                return null;
+            }
+
+            void BCIndexFileCreate(string file_bcl_path)
+            {
+                if (!filetools.LocalFileExists(file_bcl_path))
+                {
+                    /* 判断是否是首个文件 */
+                    if (StreamOption.Handler.IsFirstBCIndex)
+                    {
+                        using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            stream.Write(OBytes, 0, OBytes.Length);
+                            stream.Write(OBytes, 0, OBytes.Length);
+
+                            StreamOption.Pointer.NextBCPointer(OBytes.Length * 2);
+                        }
+                    }
+                    else
+                    {
+                        /* 文件头 */
+                        using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            byte[] per_index_obytes = System.BitConverter.GetBytes(StreamOption.Handler.GetPrevBCIndex());
+                            byte[] per_index_bytes = new byte[OBytes.Length];
+
+                            Buffer.BlockCopy(per_index_obytes, 0, per_index_bytes, 0, per_index_bytes.Length);
+
+                            stream.Write(per_index_bytes, 0, per_index_bytes.Length);
+                            stream.Write(OBytes, 0, OBytes.Length);
+                            StreamOption.Pointer.NextBCPointer(per_index_bytes.Length + OBytes.Length);
+                        }
+
+                        string per_bcl_path = this.TargetDirectoryPath + StreamOption.Handler.GetPrevBCIndex() + BCL_EXT;
+
+                        /* 改写上个文件中的next文件名称 */
+                        using (FileStream stream = new FileStream(per_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, false))
+                        {
+                            byte[] next_index_obytes = System.BitConverter.GetBytes(StreamOption.Handler.GetBCIndex());
+                            byte[] next_index_bytes = new byte[OBytes.Length];
+
+                            Buffer.BlockCopy(next_index_obytes, 0, next_index_bytes, 0, next_index_bytes.Length);
+
+                            stream.Seek(OBytes.Length, SeekOrigin.Begin);
+                            stream.Write(next_index_bytes, 0, next_index_bytes.Length);
+                        }
+                    }
+                }
+            }
+
+            void WriteFB(string[] content)
+            {
+                string dir_fbl_path = this.TargetDirectoryPath + StreamOption.Handler.GetFBIndex() + FBL_EXT;
+
+                filetools.LocalFileCreate(dir_fbl_path, false);
+
+                //TODO:stream优化
+                File.AppendAllLines(dir_fbl_path, content);
+
+                StreamOption.Pointer.NextFBPointer();
+            }
         }
 
-        internal class FBPointer
+        internal class PKItem
         {
-            public int FB_Pointer = 0;
-            public int BC_Pointer = 0;
+            internal string ItemType { get; set; }
 
-            public void FBPointerReset()
+            internal string Name { get; set; }
+
+            internal byte[] Content { get; set; }
+        }
+
+        internal class PKStreamOption
+        {
+            private readonly int FBL_NUMBER = 200;
+
+            internal PKHandler Handler { get; set; }
+            internal PKPointer Pointer { get; set; }
+
+            public PKStreamOption()
+            {
+                Handler = new PKHandler();
+                Pointer = new PKPointer();
+            }
+
+            public void NextFBPointer()
+            {
+                Pointer.NextFBPointer();
+
+                if (Pointer.GetFBPointer() == FBL_NUMBER)
+                {
+                    Handler.NextFBIndex();
+                    Pointer.FBPointerReset();
+                }
+            }
+        }
+
+        internal class PKHandler
+        {
+            private int FB_Index = 0;
+            private int BC_Index = 1;
+
+            public bool IsFirstBCIndex
+            {
+                get { return this.BC_Index == 1; }
+            }
+
+            public int NextFBIndex()
+            {
+                return FB_Index++;
+            }
+
+            public int NextBCIndex()
+            {
+                return BC_Index++;
+            }
+
+            public int GetFBIndex()
+            {
+                return FB_Index;
+            }
+
+            public int GetBCIndex()
+            {
+                return BC_Index;
+            }
+
+            public int GetPrevBCIndex()
+            {
+                return BC_Index - 1;
+            }
+        }
+
+        internal class PKPointer
+        {
+            int FB_Pointer = 0;
+            int BC_Pointer = 0;
+
+            internal void FBPointerReset()
             {
                 FB_Pointer = 0;
             }
 
-            public void BCPointerReset()
+            internal void BCPointerReset()
             {
                 BC_Pointer = 0;
+            }
+
+            internal int GetFBPointer()
+            {
+                return this.FB_Pointer;
+            }
+
+            internal int GetBCPointer()
+            {
+                return this.BC_Pointer;
+            }
+
+            internal int NextFBPointer()
+            {
+                return this.FB_Pointer++;
+            }
+
+            internal int NextBCPointer(int num)
+            {
+                this.BC_Pointer += num;
+                return this.BC_Pointer;
             }
         }
 
         #region Private Methods
 
-        private void LoopPackage(string sourceRootDirectoryPath, string sourceDirectoryPath, string targetDirectoryPath, FBHandler handler, FBPointer pointer)
+        private void LoopPackage(string sourceRootDirectoryPath, string sourceDirectoryPath, PKStream pk_stream)
         {
-            filetools.LocalDirectoryRemoveReadOnlyAttribute(sourceDirectoryPath);
-
             DirectoryInfo source_direcoty = new DirectoryInfo(sourceDirectoryPath);
 
-            if (pointer.FB_Pointer == FBL_NUMBER)
-            {
-                handler.FB_Index++;
-                pointer.FBPointerReset();
-            }
+            string directory_itemtype = "[Dirctory]";
+            string directory_name = source_direcoty.FullName.Replace(sourceRootDirectoryPath, "");
 
-            string dir_fbl_path = targetDirectoryPath + handler.FB_Index + FBL_EXT;
-
-            filetools.LocalFileCreate(dir_fbl_path, false);
-
-            File.AppendAllLines(dir_fbl_path, new string[] { "[Dirctory]", "Name=" + source_direcoty.FullName.Replace(sourceRootDirectoryPath, "")});
-
-            pointer.FB_Pointer++;
+            pk_stream.Write(new PKItem { ItemType = directory_itemtype, Name = directory_name });
 
             /* file package */
             FileInfo[] fileinfos = source_direcoty.GetFiles();
@@ -230,235 +506,13 @@
 
                 FileInfo fileinfo = fileinfos[i];
 
-                if (pointer.FB_Pointer == FBL_NUMBER)
-                {
-                    handler.FB_Index++;
-                    pointer.FBPointerReset();
-                }
-
                 byte[] filebytes = File.ReadAllBytes(fileinfo.FullName);
-                int filelength = filebytes.Length;
-                int start_bcl_index = handler.BC_Index;
-                int start_bcl_pointer = pointer.BC_Pointer;
 
-                /* file bcl */
-                string file_bcl_path = targetDirectoryPath + handler.BC_Index + BCL_EXT;
+                string file_itemtype = "[File]";
+                string file_name = fileinfo.FullName.Replace(sourceRootDirectoryPath, "");
 
-                if (!filetools.LocalFileExists(file_bcl_path))
-                {
-                    if (handler.BC_Index == 1)
-                    {
-                        using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                        {
-                            stream.Write(OBytes, 0, 3);
-                            stream.Write(OBytes, 0, 3);
-                            pointer.BC_Pointer += 6;
-                        }
-                    }
-                    else
-                    {
-                        using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                        {
-                            byte[] per_index_obytes = System.BitConverter.GetBytes(handler.BC_Index - 1);
-                            byte[] per_index_bytes = new byte[3];
-
-                            if (sizeof(int) == 8)
-                            {
-                                Buffer.BlockCopy(per_index_obytes, 0, per_index_bytes, 0, 3);
-                            }
-                            else
-                            {
-                                Buffer.BlockCopy(per_index_obytes, 0, per_index_bytes, 0, 3);
-                            }
-
-                            stream.Write(per_index_bytes, 0, 3);
-                            stream.Write(OBytes, 0, 3);
-                            pointer.BC_Pointer += 6;
-                        }
-
-                        string per_bcl_path = targetDirectoryPath + (handler.BC_Index - 1) + BCL_EXT;
-
-                        using (FileStream stream = new FileStream(per_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                        {
-                            byte[] next_index_obytes = System.BitConverter.GetBytes(handler.BC_Index);
-                            byte[] next_index_bytes = new byte[3];
-
-                            if (sizeof(int) == 8)
-                            {
-                                Buffer.BlockCopy(next_index_obytes, 0, next_index_bytes, 0, 3);
-                            }
-                            else
-                            {
-                                Buffer.BlockCopy(next_index_obytes, 0, next_index_bytes, 0, 3);
-                            }
-
-                            stream.Seek(3, SeekOrigin.Begin);
-                            stream.Write(next_index_bytes, 0, 3);
-                            //pointer.BC_Pointer += 6;
-                        }
-                    }
-                }
-
-                start_bcl_pointer = pointer.BC_Pointer;
-
-                //int less_length = BCL_SIZE - pointer.BC_Pointer - 1;
-                int less_length = BCL_SIZE - pointer.BC_Pointer;
-
-                if (less_length > filelength)
-                {
-                    using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                    {
-                        stream.Position = stream.Length;
-                        stream.Write(filebytes, 0, filelength);
-                        pointer.BC_Pointer += filelength;
-                    }
-                }
-                else if (less_length < filelength)
-                {
-                    int less_write_length = 0;
-
-                    /* first file */
-                    using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                    {
-                        stream.Position = stream.Length;
-                        stream.Write(filebytes, 0, less_length);
-                        byte[] aaa = new byte[less_length];
-                        Buffer.BlockCopy(filebytes, 0, aaa, 0, less_length);
-                        allwritebytes.AddRange(aaa);
-                        pointer.BCPointerReset(); 
-                        handler.BC_Index++;
-                    }
-
-                    less_write_length = filelength - less_length;
-
-                    //int write_file_length = (less_write_length + (BCL_SIZE + 6) - 1) / (BCL_SIZE + 6);
-                    int write_file_length = (less_write_length + (BCL_SIZE + 6) - 1) / (BCL_SIZE + 6);
-
-                    for (int j = 0; j < write_file_length; j++)
-                    {
-                        string middle_file_bcl_path = targetDirectoryPath + handler.BC_Index + BCL_EXT;
-
-                        if (!filetools.LocalFileExists(middle_file_bcl_path))
-                        {
-                            if (handler.BC_Index == 1)
-                            {
-                                using (FileStream stream = new FileStream(middle_file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                                {
-                                    stream.Write(OBytes, 0, 3);
-                                    stream.Write(OBytes, 0, 3);
-                                    pointer.BC_Pointer += 6;
-                                }
-                            }
-                            else
-                            {
-                                using (FileStream stream = new FileStream(middle_file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                                {
-                                    byte[] per_index_obytes = System.BitConverter.GetBytes(handler.BC_Index - 1);
-                                    byte[] per_index_bytes = new byte[3];
-
-                                    if (sizeof(int) == 8)
-                                    {
-                                        Buffer.BlockCopy(per_index_obytes, 0, per_index_bytes, 0, 3);
-                                    }
-                                    else
-                                    {
-                                        Buffer.BlockCopy(per_index_obytes, 0, per_index_bytes, 0, 3);
-                                    }
-
-                                    stream.Write(per_index_bytes, 0, 3);
-                                    stream.Write(OBytes, 0, 3);
-                                    pointer.BC_Pointer += 6;
-                                }
-
-                                string per_bcl_path = targetDirectoryPath + (handler.BC_Index - 1) + BCL_EXT;
-
-                                using (FileStream stream = new FileStream(per_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                                {
-                                    byte[] next_index_obytes = System.BitConverter.GetBytes(handler.BC_Index);
-                                    byte[] next_index_bytes = new byte[3];
-
-                                    if (sizeof(int) == 8)
-                                    {
-                                        Buffer.BlockCopy(next_index_obytes, 0, next_index_bytes, 0, 3);
-                                    }
-                                    else
-                                    {
-                                        Buffer.BlockCopy(next_index_obytes, 0, next_index_bytes, 0, 3);
-                                    }
-
-                                    stream.Seek(3, SeekOrigin.Begin);
-                                    stream.Write(next_index_bytes, 0, 3);
-                                    //pointer.BC_Pointer += 6;
-                                }
-                            }
-                        }
-
-                        //int middle_less_length = BCL_SIZE - pointer.BC_Pointer - 1;
-                        int middle_less_length = BCL_SIZE - pointer.BC_Pointer;
-
-                        if (middle_less_length > less_write_length)
-                        {
-                            using (FileStream stream = new FileStream(middle_file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                            {
-                                stream.Position = stream.Length;
-                                stream.Write(filebytes, filelength - less_write_length, less_write_length);
-                                byte[] aaa = new byte[less_write_length];
-                                Buffer.BlockCopy(filebytes, filelength - less_write_length, aaa, 0, less_write_length);
-                                allwritebytes.AddRange(aaa);
-                                //pointer.BCPointerReset();
-                                pointer.BC_Pointer += less_write_length;
-                            }
-                        }
-                        else if (middle_less_length < less_write_length)
-                        {
-                            using (FileStream stream = new FileStream(middle_file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                            {
-                                stream.Position = stream.Length;
-                                stream.Write(filebytes, (filelength - less_write_length), middle_less_length);
-                                byte[] aaa = new byte[middle_less_length];
-                                Buffer.BlockCopy(filebytes, (filelength - less_write_length), aaa, 0, middle_less_length);
-                                allwritebytes.AddRange(aaa);
-                                pointer.BCPointerReset();
-                                handler.BC_Index++;
-                                less_write_length -= middle_less_length;
-                            }
-                        }
-                        else/* middle_less_length == less_write_length */
-                        {
-                            using (FileStream stream = new FileStream(middle_file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                            {
-                                stream.Position = stream.Length;
-                                stream.Write(filebytes, filelength - less_write_length, less_write_length);
-                                byte[] aaa = new byte[less_write_length];
-                                Buffer.BlockCopy(filebytes, filelength - less_write_length, aaa, 0, less_write_length);
-                                allwritebytes.AddRange(aaa);
-                                pointer.BCPointerReset();
-                                handler.BC_Index++;
-                            }
-                        }
-                    }
-                }
-                else/* less_length == filelength */
-                {
-                    using (FileStream stream = new FileStream(file_bcl_path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.Read, STREAM_WRITE_BUFFER, USE_STREAM_ASYNC))
-                    {
-                        stream.Position = stream.Length;
-                        stream.Write(filebytes, 0, filelength);
-                        pointer.BCPointerReset();
-                        handler.BC_Index++;
-                    }
-                }
-
-                /* file fbl */
-                string file_fbl_path = targetDirectoryPath + handler.FB_Index + FBL_EXT;
-
-                filetools.LocalFileCreate(dir_fbl_path, false);
-
-                File.AppendAllLines(dir_fbl_path, new string[] { "[File]", "Name=" + fileinfo.FullName.Replace(sourceRootDirectoryPath, ""), "BCLIndex=" + start_bcl_index, "StartIndex=" + start_bcl_pointer,  "Length=" + filebytes.Length });
-
-                pointer.FB_Pointer++;
+                pk_stream.Write(new PKItem { ItemType = file_itemtype, Name = file_name, Content = filebytes });
             }
-            /* file package end */
 
             /* directory */
             DirectoryInfo[] directorys = source_direcoty.GetDirectories();
@@ -466,7 +520,7 @@
             {
                 DirectoryInfo directory = directorys[k];
 
-                LoopPackage(sourceRootDirectoryPath, directory.FullName, targetDirectoryPath, handler, pointer);
+                LoopPackage(sourceRootDirectoryPath, directory.FullName, pk_stream);
             }
 
         }
